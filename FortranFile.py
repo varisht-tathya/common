@@ -80,10 +80,13 @@ class FortranFile:
         self.file.write(size+buffer+size)
 
     def writeFormatVector(self,data,formatString,outputSize=None):
-        buffer=''
+        buffer=b''
         for index,value in enumerate(data):
-            if type(value) in [types.ListType,types.TupleType]:
-                for x in value: buffer += struct.pack(formatString[index],x)
+            if isinstance(value, (list, tuple)):
+            # if type(value) in [types.ListType,types.TupleType]:
+                # buffer += struct.pack(formatString[index] * len(value), *value)
+                for x in value: 
+                    buffer += struct.pack(formatString[index],x)
             else:
                 buffer += struct.pack(formatString[index],value)
 
