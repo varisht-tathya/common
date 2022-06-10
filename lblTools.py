@@ -394,6 +394,7 @@ def readTape12(fileName, double=False, fType=0):
 
   # read file header
   data = fortranFile.getRecord()
+  # print(data)
 
   # format for each panel header
   if double: lfmt = 'dddl'
@@ -494,7 +495,7 @@ def rpReadTape12(fileName, double=False, fType=0):
       print(len(data))
     # endif buff len
 
-    break
+    # break
     if data is None: break
 
     # concatenate (NOT append) onto output
@@ -510,7 +511,7 @@ def rpReadTape12(fileName, double=False, fType=0):
     #print ctr, v1, v2, len(outParam)
   # endwhile
 
-  sys.exit('GOT HERE')
+  # sys.exit('GOT HERE')
   if buff:
     try:
       # read panel header and underlying data
@@ -752,7 +753,7 @@ def writeTape5(path, parameterDictionary, isFile=False, monoRTM=False,useMeters=
     if outputType == 2 and not monoRTM:
         print("Writing for solar upwelling")
         if parameterDictionary['inFlag'] == 2 and parameterDictionary['iotFlag'] == 2:
-            print(' HI=0 F4=0 CN=0 AE=0 EM=2 SC=0 FI=0 PL=0 TS=0 AM=0 MG=0 LA=0 OD=0 XS=0    0    0', file=tape5file)
+            print(' HI=0 F4=0 CN=0 AE=0 EM=2 SC=0 FI=0 PL=0 TS=0 AM=0 MG=4 LA=0 OD=0 XS=0    0    0', file=tape5file)
             print("%5d%5d  %3d%5d%10.5f     %10.5f" % (parameterDictionary['inFlag'], parameterDictionary['iotFlag'], parameterDictionary['solarDay'], -1,0.0,0.0), file=tape5file)
             surfRefl = ['s']
             print('%10.3f%10.3f%10.3f%10.3f%10.3f%10.3f%10.3f%5s' % tuple(surfaceTerrain + surfRefl), file=tape5file)
@@ -791,7 +792,7 @@ def writeTape5(path, parameterDictionary, isFile=False, monoRTM=False,useMeters=
         else:
             print("Writing record 1.2 for solar")
             print(\
-            ' HI=0 F4=0 CN=0 AE=%0d EM=%0d SC=0 FI=0 PL=0 TS=0 AM=1 MG=3 LA=0 OD=%0d XS=0    0    0' \
+            ' HI=0 F4=0 CN=0 AE=%0d EM=%0d SC=0 FI=0 PL=0 TS=0 AM=1 MG=4 LA=0 OD=%0d XS=0    0    0' \
               % (aerosols, outputType, iodFlag), file=tape5file)
 
         # write record 1.2a
@@ -1190,6 +1191,7 @@ class LblObject:
 
         self.monoRtmCommand = None
         self.monoRtmSpectraFileName = None
+        os.chdir(self.workPath)
 
         self.makeWorkPath()
         
@@ -1349,7 +1351,7 @@ class LblObject:
         if radianceFlag or downwellingFlag or upwellingFlag:
             rtParameters['output'] = self.outputList[RADIANCE]
             tape5 = writeTape5(self.workPath, rtParameters)
-            results = run(self.rtCommand, self.tape3fileName, tape5, ostream=self, thread=thread)
+            results = run([os.path.join(self.workPath,self.rtCommand), self.tape3fileName, tape5], capture_output=True)
             
             if results.__contains__(RADIANCE):
                 if radianceFlag: output[WAVE_NUMBER] = outputGrid[:]
@@ -1376,7 +1378,7 @@ class LblObject:
              
             localRtParameters['output'] = self.outputList[OPTICAL_DEPTH]
             tape5 = writeTape5(self.workPath, localRtParameters)
-            results = run(self.rtCommand, self.tape3fileName, tape5, ostream=self, thread=thread)
+            results = run(self.rtCommand, self.tape3fileName, tape5, thread=thread)
             if results.__contains__(OPTICAL_DEPTH):
                 output[SOLAR_OPTICAL_DEPTH] = np.interp(outputGrid, results[OPTICAL_DEPTH][0],
                                                       results[OPTICAL_DEPTH][1]).tolist()
@@ -1396,7 +1398,8 @@ class LblObject:
                         thread=thread)
             
             if results.__contains__(SOLAR):
-                if not upwellingFlag: output[WAVE_NUMBER] = outputGrid[:]
+                if not upwellingFlag: 
+                    output[WAVE_NUMBER] = outputGrid[:]
                 # convert from 1/cm2 to 1/m2
                 # output[RADIANCE]=(np.interp(outputGrid,wn,radiance)*1e4).tolist()
                 
