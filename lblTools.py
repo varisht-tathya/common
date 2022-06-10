@@ -1,7 +1,7 @@
 #!/usr/bin/python
 
 # for Python 3 compatibility
-from __future__ import print_function
+# from __future__ import print_function
 
 # -*- coding: utf-8 -*-
 import os
@@ -13,11 +13,13 @@ import math
 import types
 import glob
 import struct
+from typing import List
 import numpy as np
 import stat
 import FortranFile
 import traceback
 import logging
+from subprocess import run
 
 logger = logging.getLogger(__name__)
 
@@ -281,7 +283,7 @@ def readTape7(fName, sList=False):
   return ll
 # end readTape7
 
-def readTape12(fileName, double=False, fType=0):
+def readTape12(fileName, double=False, fType=0, output_variables_per_panel=1):
   """
   Read in a TAPE12 (or similar TAPE10-13) LBLRTM output binary file
   and return spectrum
@@ -317,7 +319,7 @@ def readTape12(fileName, double=False, fType=0):
       tested with this function
   """
 
-  def readLBLPanel(ffObj, pHeaderForm):
+  def readLBLPanel(ffObj, pHeaderForm, output_variables_per_panel = 1):
     """
     Read in a single panel
 
@@ -341,38 +343,31 @@ def readTape12(fileName, double=False, fType=0):
     # initialization of variables that change with panel
     OK = True;
     outWN = []; outParam = []
-    ctr = 1
+    outParam = [[] for _ in range(output_variables_per_panel)]
     while OK:
       buff = fortranFile.getRecord()
 
-      # grab binary data if valid buffer and not a panel header
-      #if len(buff) == struct.calcsize(lfmt): continue
       while buff is not None and len(buff) != struct.calcsize(lfmt):
         buff = fortranFile.getRecord()
-
       # end while buff
       if buff:
         try:
           # read panel header and underlying data
           (v1, v2, dv, nPanel) = struct.unpack(lfmt, buff)
-          data = fortranFile.readDoubleVector() if double else \
-            fortranFile.readFloatVector()
-          #print len(data), ctr
-          ctr += 1
-
-          # concatenate (NOT append) onto output
-          # for now, this is just radiance -- looks like other
-          # parameters like transmittances are in other panels
-          outParam += data
-
+          logger.info('v1: %f v2: %f, dv: %f num: %d', v1, v2, dv, nPanel)
+          for i in range(output_variables_per_panel):
+            data = fortranFile.readDoubleVector() if double else \
+                fortranFile.readFloatVector()
+            # concatenate (NOT append) onto output
+            outParam[i] += data
           # concatenate wavenumber array (without numpy) based 
           # on spectral resolution and starting wavenumber
           outWN += \
             map(lambda x:v1 + x * dv, range(len(data)))
         except (KeyboardInterrupt, SystemExit):
           raise
-        except:
-          #print 'Data could not be read, file may be corrupted'
+        except Exception as e:
+          logger.error('Data could not be read, file may be corrupted')
           OK = False
       else:
         # end of panel
@@ -385,24 +380,21 @@ def readTape12(fileName, double=False, fType=0):
 
   # main readTape12()
   iFormat = 'l'
-  if struct.calcsize('l') == 8:iFormat = 'i'
+  if struct.calcsize('l') == 8:iFormat = 'q'
 
   # instantiate FortranFile object
   fortranFile = FortranFile.FortranFile(fileName)
 
   # read file header
   data = fortranFile.getRecord()
+  logger.info("TOP HEADER %s", str(data))
 
   # format for each panel header
-  if double: lfmt = 'dddl'
-  else: lfmt = 'ddf%s' % iFormat
+  if double: lfmt = 'dddq'
+  else: lfmt = 'ddd%s' % iFormat
+  logger.info('header struct format %s', lfmt)
 
-  waveNumbers, output = readLBLPanel(fortranFile, lfmt)
-
-  # read file header
-  #waveNumbers, output = readLBLPanel(fortranFile, lfmt, header=False)
-  #print len(waveNumbers)
-  #waveNumbers, output = readLBLPanel(fortranFile, lfmt)
+  waveNumbers, output = readLBLPanel(fortranFile, lfmt, output_variables_per_panel=output_variables_per_panel)
 
   return np.array(waveNumbers), np.array(output)
 # end readTape12()
@@ -492,7 +484,7 @@ def rpReadTape12(fileName, double=False, fType=0):
       print(len(data))
     # endif buff len
 
-    break
+    # break
     if data is None: break
 
     # concatenate (NOT append) onto output
@@ -508,7 +500,7 @@ def rpReadTape12(fileName, double=False, fType=0):
     #print ctr, v1, v2, len(outParam)
   # endwhile
 
-  sys.exit('GOT HERE')
+  # sys.exit('GOT HERE')
   if buff:
     try:
       # read panel header and underlying data
@@ -597,17 +589,19 @@ def generateHeightGrid(heights, observer, target, nLayers):
     try:
         dx = int(max(heights) - min(heights)) / (nLayers - 1)
         layers = map(lambda x: x * dx / 1000. + min(heights) / 1000., range(nLayers))
-        return len(layers), layers
-    except (KeyboardInterrupt, SystemExit):
-        raise
+        layer_list = list(layers)
+        return len(layer_list), layer_list
+    except (KeyboardInterrupt, SystemExit) as e:
+        raise e
     except:
         try:
             hRange = max([observer, target]) - min([observer, target])
             dx = hRange / (nLayers - 1)
             layers = map(lambda x: x * dx + min([observer, target]), range(nLayers))
-            return len(layers), layers
-        except (KeyboardInterrupt, SystemExit):
-            raise
+            layer_list = list(layers)
+            return len(layer_list), layer_list
+        except (KeyboardInterrupt, SystemExit) as e:
+            raise e
         except:
             return 0, 0
 
@@ -637,33 +631,33 @@ def writeTape5(path, parameterDictionary, isFile=False, monoRTM=False,useMeters=
 
     # Define Tangent
 
-    if parameterDictionary.has_key('tangentFlag') and parameterDictionary['tangentFlag']:
+    if parameterDictionary.__contains__('tangentFlag') and parameterDictionary['tangentFlag']:
         tangent=1
     else:
         tangent=0
 
     # Define IAERSL
 
-    if parameterDictionary.has_key('aerosols'):
+    if parameterDictionary.__contains__('aerosols'):
         aerosols = parameterDictionary['aerosols']
     else: 
         aerosols = 0
 
     # Define IEMIT
 
-    if parameterDictionary.has_key('output'):
+    if parameterDictionary.__contains__('output'):
         outputType = int(parameterDictionary['output'])
     else: outputType = 0
 
-    if parameterDictionary.has_key('model'):
+    if parameterDictionary.__contains__('model'):
         model = int(parameterDictionary['model'])
     else: model = None
 
-    if parameterDictionary.has_key('units'):
+    if parameterDictionary.__contains__('units'):
         units = int(parameterDictionary['units'])
     else: units = None
 
-    if not parameterDictionary.has_key('usePressure'):
+    if not parameterDictionary.__contains__('usePressure'):
         observer = parameterDictionary['h1'] / 1000.
         target = parameterDictionary['h2'] / 1000.
         units = 1
@@ -676,11 +670,11 @@ def writeTape5(path, parameterDictionary, isFile=False, monoRTM=False,useMeters=
         target = parameterDictionary['h2']
         units = -1
 
-    if parameterDictionary.has_key('pathL'): pl = parameterDictionary['pathL'] / 1000.
-    elif parameterDictionary.has_key('pathLength'): pl = parameterDictionary['pathLength'] / 1000.
+    if parameterDictionary.__contains__('pathL'): pl = parameterDictionary['pathL'] / 1000.
+    elif parameterDictionary.__contains__('pathLength'): pl = parameterDictionary['pathLength'] / 1000.
     else: pl = 0
 
-    if parameterDictionary.has_key('horz'): 
+    if parameterDictionary.__contains__('horz'): 
         if parameterDictionary['horz']:
             horz=1
         else:
@@ -694,13 +688,13 @@ def writeTape5(path, parameterDictionary, isFile=False, monoRTM=False,useMeters=
     userAltitudes = []
     userPressures = []
     
-    if parameterDictionary.has_key('userDefinedLevels'):
+    if parameterDictionary.__contains__('userDefinedLevels'):
         parameterDictionary['udl'] = parameterDictionary['userDefinedLevels']
 
-    if parameterDictionary.has_key('udl'):
+    if parameterDictionary.__contains__('udl'):
         if parameterDictionary['udl']:
-            if type(parameterDictionary['udl']) == types.ListType:
-                if parameterDictionary.has_key('usePressure') and parameterDictionary['usePressure']:
+            if isinstance(parameterDictionary['udl'], list):
+                if parameterDictionary.__contains__('usePressure') and parameterDictionary['usePressure']:
                     userPressures = sorted(parameterDictionary['udl'],
                             None, None, 1)
                     userDefinedLayers = -len(parameterDictionary['udl'])
@@ -708,14 +702,18 @@ def writeTape5(path, parameterDictionary, isFile=False, monoRTM=False,useMeters=
                     userAltitudes = sorted(parameterDictionary['udl'])
                     userDefinedLayers = len(parameterDictionary['udl'])
             else:
-                if parameterDictionary['udl'] is True: userDefinedLayers = 100
-                elif parameterDictionary['udl'] > 10: userDefinedLayers = parameterDictionary['udl']
-                else: userDefinedLayers = 100
+                print(f"Setting User Defined Levels as {parameterDictionary['udl']}")
+                if parameterDictionary['udl']: 
+                  userDefinedLayers = 100
+                elif parameterDictionary['udl'] > 10: 
+                  userDefinedLayers = parameterDictionary['udl']
+                else: 
+                  userDefinedLayers = 100
 
-                if parameterDictionary.has_key('Height'): height = parameterDictionary['Height']
+                if parameterDictionary.__contains__('Height'): height = parameterDictionary['Height']
                 else: height = None
                     
-                if parameterDictionary.has_key('usePressure'):
+                if parameterDictionary.__contains__('usePressure'):
                     if parameterDictionary['usePressure']:
                         userDefinedLayers, userPressures = generatePressureGrid(parameterDictionary['Pres'],
                                                                              observer, target,
@@ -729,35 +727,39 @@ def writeTape5(path, parameterDictionary, isFile=False, monoRTM=False,useMeters=
         else: userDefinedLayers = 0
     else: userDefinedLayers = 0
 
-    if parameterDictionary.has_key('surfaceTerrain'):
+    if parameterDictionary.__contains__('surfaceTerrain'):
         surfaceTerrain = parameterDictionary['surfaceTerrain']
     else: surfaceTerrain = [300, 0.1, 0, 0, 0.9, 0, 0]
 
     # write record 1.1
-    print >> tape5file, '$ TAPE5 by Python, range %f %f %s' % (waveNumber1, waveNumber2, time.asctime())
+    print("Writing Record 1.1")
+    print('$ TAPE5 by Python, range %f %f %s' % (waveNumber1, waveNumber2, time.asctime()), file=tape5file)
 
-    if not parameterDictionary.has_key('inFlag'): parameterDictionary['inFlag'] = 0
-    if not parameterDictionary.has_key('iotFlag'): parameterDictionary['iotFlag'] = 0
+    if not parameterDictionary.__contains__('inFlag'): parameterDictionary['inFlag'] = 0
+    if not parameterDictionary.__contains__('iotFlag'): parameterDictionary['iotFlag'] = 0
 
     # solar upwelling
     if outputType == 2 and not monoRTM:
+        print("Writing for solar upwelling")
         if parameterDictionary['inFlag'] == 2 and parameterDictionary['iotFlag'] == 2:
-            print >> tape5file, ' HI=0 F4=0 CN=0 AE=0 EM=2 SC=0 FI=0 PL=0 TS=0 AM=0 MG=0 LA=0 OD=0 XS=0    0    0'
-            print >> tape5file, "%5d%5d  %3d" % (parameterDictionary['inFlag'], parameterDictionary['iotFlag'],
-                                              parameterDictionary['solarDay'])
-            print >> tape5file, "0.0      0.0"
-            print >> tape5file, "-1."
-            print >> tape5file, "%"
+            print(' HI=0 F4=0 CN=0 AE=0 EM=2 SC=0 FI=0 PL=0 TS=0 AM=0 MG=4 LA=0 OD=0 XS=0    0    0', file=tape5file)
+            print("%5d%5d  %3d%5d%10.5f     %10.5f" % (parameterDictionary['inFlag'], parameterDictionary['iotFlag'], parameterDictionary['solarDay'], -1,0.0,0.0), file=tape5file)
+            surfRefl = ['s']
+            print('%10.3f%10.3f%10.3f%10.3f%10.3f%10.3f%10.3f%5s' % tuple(surfaceTerrain + surfRefl), file=tape5file)
+
+            # print("0.0      0.0", file=tape5file)
+            # print("-1.", file=tape5file)
+            print("%", file=tape5file)
             tape5file.close()
             return os.path.join(path, 'TAPE5')
 
-    if parameterDictionary.has_key('iodFlag'):
+    if parameterDictionary.__contains__('iodFlag'):
         iodFlag = parameterDictionary['iodFlag']
     else:
         if outputType: iodFlag = 1
         else: iodFlag = 1
 
-    if parameterDictionary.has_key('noContinuum'):
+    if parameterDictionary.__contains__('noContinuum'):
         if parameterDictionary['noContinuum']:
             continuumFlag = 0
         else:
@@ -766,80 +768,82 @@ def writeTape5(path, parameterDictionary, isFile=False, monoRTM=False,useMeters=
         continuumFlag = 1
             
     # write record 1.2
+    print("Writing Record 1.2")
     if monoRTM:
         iPlot = 1
         iod = 0
-        print >> tape5file, "%4s%1i%9s%1i%9s%1i%14s%1i%9s%1i%14s%1i%4s%1i%16s%4i" % ("", 1, "", 1, "", 1, "", iPlot, "", 1, "", iod, "", 0, "", 0)        
+        print("%4s%1i%9s%1i%9s%1i%14s%1i%9s%1i%14s%1i%4s%1i%16s%4i" % ("", 1, "", 1, "", 1, "", iPlot, "", 1, "", iod, "", 0, "", 0) , file=tape5file)       
     else:
         if outputType < 2:
-            print >> tape5file, \
-            ' HI=1 F4=1 CN=%0d AE=%0d EM=%0d SC=0 FI=0 PL=0 TS=0 AM=1 MG=0 LA=0 OD=%0d XS=0    0    0' \
-              % (continuumFlag,aerosols, outputType, iodFlag)
+            print(\
+            ' HI=1 F4=1 CN=%0d AE=%0d EM=%0d SC=0 FI=0 PL=0 TS=0 AM=1 MG=3 LA=0 OD=%0d XS=0    0    0' \
+              % (continuumFlag,aerosols, outputType, iodFlag), file=tape5file)
         else:
-            print >> tape5file, \
-            ' HI=0 F4=0 CN=0 AE=%0d EM=%0d SC=0 FI=0 PL=0 TS=0 AM=1 MG=0 LA=0 OD=%0d XS=0    0    0' \
-              % (aerosols, outputType, iodFlag)
+            print("Writing record 1.2 for solar")
+            print(\
+            ' HI=0 F4=0 CN=0 AE=%0d EM=%0d SC=0 FI=0 PL=0 TS=0 AM=1 MG=4 LA=0 OD=%0d XS=0    0    0' \
+              % (aerosols, outputType, iodFlag), file=tape5file)
 
         # write record 1.2a
-
+        print("Writing Record 1.2a")
         if outputType == 2:
             # INFLAG,  IOTFLG,  JULDAT
             #  1-5,    6-10,   13-15
             #   I5,      I5,  2X, I3
 
-            print >> tape5file, "%5d%5d  %3d" % (parameterDictionary['inFlag'], parameterDictionary['iotFlag'],
-                                              parameterDictionary['solarDay'])
+            print("%5d%5d  %3d" % (parameterDictionary['inFlag'], parameterDictionary['iotFlag'],
+                                              parameterDictionary['solarDay']), file=tape5file)
 
     # determine molecule scaling
         
     nms = 0
-    if parameterDictionary.has_key('co2scale'):
-        if parameterDictionary['co2scale']: nms = 6
-    if parameterDictionary.has_key('wvScale'):
+    if parameterDictionary.__contains__('co2scale'):
+        if parameterDictionary['co2scale']: nms = 2
+    if parameterDictionary.__contains__('wvScale'):
         if parameterDictionary['wvScale']: nms = 6
-    if parameterDictionary.has_key('ch4scale'):
+    if parameterDictionary.__contains__('ch4scale'):
         if parameterDictionary['ch4scale']: nms = 6
             
     if nms>0:
         co2scale = DEFAULT_CO2
-        if parameterDictionary.has_key('co2scale'): co2scale = parameterDictionary['co2scale']
+        if parameterDictionary.__contains__('co2scale'): co2scale = parameterDictionary['co2scale']
         if not co2scale: co2scale = DEFAULT_CO2
 
         wvScale = 1.0
-        if parameterDictionary.has_key('wvScale'): wvScale = parameterDictionary['wvScale']
+        if parameterDictionary.__contains__('wvScale'): wvScale = parameterDictionary['wvScale']
         if not wvScale: wvScale = 1.0
 
         ch4scale = DEFAULT_CH4
-        if parameterDictionary.has_key('ch4scale'): ch4scale = parameterDictionary['ch4scale']
+        if parameterDictionary.__contains__('ch4scale'): ch4scale = parameterDictionary['ch4scale']
         if not ch4scale: ch4scale = DEFAULT_CH4
 
     co2only=False
     o2only=False
     
-    if parameterDictionary.has_key('co2only'):
+    if parameterDictionary.__contains__('co2only'):
         if parameterDictionary['co2only']:
             nms=DEFAULT_NMOL
             co2only=True
-    elif parameterDictionary.has_key('o2only'):
+    elif parameterDictionary.__contains__('o2only'):
         if parameterDictionary['o2only']:
             nms=DEFAULT_NMOL
             o2only=True
             
     # write record 1.3
-
+    print("Writing Record 1.3")
     if monoRTM:
-        print >> tape5file, '%10.3f%10.3f%10s%10.3e%63s%2i' % (waveNumber1,
-                                                       waveNumber2, '', deltaWaveNumber, '', nms)
+        print('%10.3f%10.3f%10s%10.3e%63s%2i' % (waveNumber1,
+                                                       waveNumber2, '', deltaWaveNumber, '', nms), file=tape5file)
     else:
         if iodFlag:
-            print >> tape5file, '%10.3f%10.3f%70s%10.3e  %2i' % (waveNumber1,
-                                                         waveNumber2, '', deltaWaveNumber, nms)
+            print('%10.3f%10.3f%70s%10.3e  %2i' % (waveNumber1,
+                                                         waveNumber2, '', deltaWaveNumber, nms), file=tape5file)
         else:
-            print >> tape5file, '%10.3f%10.3f%70s%10.3e  %2i' % (waveNumber1,
-                                                         waveNumber2, '', 0, nms)
+            print('%10.3f%10.3f%70s%10.3e  %2i' % (waveNumber1,
+                                                         waveNumber2, '', 0, nms), file=tape5file)
         
     if nms>0:
-        print >> tape5file, '11   1'
+        print(' 1   1', file=tape5file)
         if o2only:
             stringFormat='%15d%15d%15d%15d%15d%15d%15d'
             scaleFactors=(0,0,0,0,0,0,1)
@@ -851,16 +855,23 @@ def writeTape5(path, parameterDictionary, isFile=False, monoRTM=False,useMeters=
             scaleFactors=(wvScale,co2scale/float(DEFAULT_CO2),1,1,1,ch4scale/float(DEFAULT_CH4))
  
         # write record 1.3a
-        print >> tape5file,stringFormat % scaleFactors
+        print("Writing Record 1.3a")
+        print(stringFormat % scaleFactors, file=tape5file)
         
     # write record 1.4
+    print("Writing Record 1.4")
     if monoRTM:
-        print >> tape5file, '%10.3f%10.3f%10.3f%10.3f%10.3f%10.3f%10.3f%5s' % tuple(surfaceTerrain + [''])
+        print('%10.3f%10.3f%10.3f%10.3f%10.3f%10.3f%10.3f%5s' % tuple(surfaceTerrain + ['']), file=tape5file)
     else:
         if outputType == 1:
             if parameterDictionary['angle'] > 90 and parameterDictionary['angle'] <= 180: surfRefl = ['l']
             else: surfRefl = ['s']
-            print >> tape5file, '%10.3f%10.3f%10.3f%10.3f%10.3f%10.3f%10.3f%5s' % tuple(surfaceTerrain + surfRefl)
+            print('%10.3f%10.3f%10.3f%10.3f%10.3f%10.3f%10.3f%5s' % tuple(surfaceTerrain + surfRefl), file=tape5file)
+
+        if outputType == 2 and parameterDictionary['iotFlag'] == 2:
+            surfRefl = ['s']
+            print('%10.3f%10.3f%10.3f%10.3f%10.3f%10.3f%10.3f%5s' % tuple(surfaceTerrain + surfRefl), file=tape5file)
+
 
     if observer == target:
         heightType = 1
@@ -872,31 +883,32 @@ def writeTape5(path, parameterDictionary, isFile=False, monoRTM=False,useMeters=
             heightType = 2
 
     # write record 3.1
-
+    print("Writing Record 3.1")
     iFXTYPE = 0
     iMunits = 0
     Re = ''
     hSpace = ''
     vBar = ''
 
-    if parameterDictionary.has_key('refLatitude'): 
+    if parameterDictionary.__contains__('refLatitude'): 
         refLat = "%10.3f" % float(parameterDictionary['refLatitude'])
     else: 
         refLat = ''
     
     if horz:
-        print >> tape5file, '    %1d    1    0    1    0    7    1%2i %2i%10s%10s%10s%10s%10s' % \
-            (model, iFXTYPE, iMunits, Re, hSpace, vBar, '', refLat)
-        print >> tape5file, '    0.000                    %10.3f' % pl
+        print('    %1d    1    0    1    0    7    1%2i %2i%10s%10s%10s%10s%10s' % \
+            (model, iFXTYPE, iMunits, Re, hSpace, vBar, '', refLat), file=tape5file)
+        print('    0.000                    %10.3f' % pl, file=tape5file)
         userDefinedLayers = 0
     else:
-        print >> tape5file, '    %1d    %1d%5d    1    0    7    1%2i %2i%10s%10s%10s%10s%10s' % (model, heightType, 
+        print(f"User defined layers are: {userDefinedLayers}")
+        print('    %1d    %1d%5d    1    0    7    1%2i %2i%10s%10s%10s%10s%10s' % (model, heightType, 
                                                                                                   userDefinedLayers, 
                                                                                                   iFXTYPE,
                                                                                                   iMunits, Re, 
                                                                                                   hSpace, vBar, '', 
-                                                                                                  refLat)
-        print >> tape5file, '%10.3f%10.3f%10.3f%10s%5i' % (observer, target, angle,'',tangent)
+                                                                                                  refLat), file=tape5file)
+        print('%10.3f%10.3f%10.3f%10s%5i' % (observer, target, angle,'',tangent), file=tape5file)
 
     if not model:
         # aptg is altitude, pressure, temperature and gases vector
@@ -908,22 +920,22 @@ def writeTape5(path, parameterDictionary, isFile=False, monoRTM=False,useMeters=
         for i in range(len(aptg), 9): aptg.append(6)
         if len(aptg) > 9: aptg = aptg[:9]
         
-        if parameterDictionary.has_key('Height'): 
+        if parameterDictionary.__contains__('Height'): 
             a = parameterDictionary['Height']
         else: 
             a = None
 
-        if parameterDictionary.has_key('Pres'): 
+        if parameterDictionary.__contains__('Pres'): 
             p = parameterDictionary['Pres']
         else: 
             p = None
             
-        if parameterDictionary.has_key('Temp'): 
+        if parameterDictionary.__contains__('Temp'): 
             t = parameterDictionary['Temp']
         else: 
             t = None
 
-        if parameterDictionary.has_key('WV'): 
+        if parameterDictionary.__contains__('WV'): 
             w = parameterDictionary['WV']
         else: 
             w = None
@@ -967,33 +979,40 @@ def writeTape5(path, parameterDictionary, isFile=False, monoRTM=False,useMeters=
 
         if userDefinedLayers:
             if userDefinedLayers > 0:
+                print("Writing user defined layers")
                 for i in range(0, len(userAltitudes), 8):
-                    print >> tape5file, '',
-                    for j in range(8):
-                        try: print >> tape5file, '%9.3f' % userAltitudes[i + j],
-                        except IndexError: break
-                    print >> tape5file
+                    # print('', file=tape5file)
+                    x = userAltitudes[i: i+8]
+                    # for j in range(8):
+                    #     x.append(userAltitudes[i + j])
+                    try:
+                        print(''.join(['%10.3f']*len(x)) % tuple(x), file=tape5file)
+                    except IndexError:
+                        break
+                    # print >> tape5file
             else:
                 for i in range(0, len(userPressures), 8):
-                    print >> tape5file, '',
-                    for j in range(8):
-                        try: 
-                            print >> tape5file, '%9.3f' % userPressures[i + j],
-                        except IndexError: 
-                            break
-                    print >> tape5file
+                    # print('', file=tape5file)
+                    x = userPressures[i: i+8]
+                    
+                    try:
+                        print(''.join(['%10.3f']*len(x)) % tuple(x), file=tape5file)
+                    except IndexError:
+                        break
+                    
         else:
             if not horz:
-                print >> tape5file
+                # print >> tape5file
+                pass
 
         if horz:
-            print >> tape5file, \
+            print(\
                 '    1                 Input from python application max h=%dm' \
-                % observer
+                % observer, file=tape5file)
         else:
-            print >> tape5file, \
+            print(\
                 '%5d               Input from python application max h=%dm' \
-                % (units * len(p), observer)
+                % (units * len(p), observer), file=tape5file)
 
         fmt = '%10.3f%10.3f%10.3f     %s%s   %s%s%s%s%s%s%s'
 
@@ -1024,7 +1043,7 @@ def writeTape5(path, parameterDictionary, isFile=False, monoRTM=False,useMeters=
 
             # write user defined first row
             for j in aptg: z.append(j)
-            print >> tape5file, fmt % tuple(z)
+            print(fmt % tuple(z), file=tape5file)
 
             z = addVariable(None, w, i)
             z = addVariable(z, co2, i)
@@ -1035,36 +1054,38 @@ def writeTape5(path, parameterDictionary, isFile=False, monoRTM=False,useMeters=
             z = addVariable(z, o2, i)
 
             # write user defined second row
-            print >> tape5file, fmt2 % tuple(z)
+            print(fmt2 % tuple(z), file=tape5file)
     else:
         if userDefinedLayers:
             if userDefinedLayers > 0:
                 for i in range(0, len(userAltitudes), 8):
-                    print >> tape5file, '',
-                    for j in range(8):
-                        try:
-                            print >> tape5file, '%9.3f' % userAltitudes[i + j],
-                        except IndexError:
-                            break
-                    print >> tape5file
+                    # print('', file=tape5file)
+                    x = userAltitudes[i: i+8]
+                    try:
+                        print(''.join(['%10.3f']*len(x)) % tuple(x), file=tape5file)
+                    except IndexError:
+                        break
+                    # print >> tape5file
             else:
                 for i in range(0, len(userPressures), 8):
-                    print >> tape5file, '',
-                    for j in range(8):
-                        try:
-                            print >> tape5file, '%9.3f' % userPressures[i + j],
-                        except IndexError:
-                            break
-                    print >> tape5file
+                    # print('', file=tape5file)
+                    x = userPressures[i: i+8]
+                    
+                    try:
+                        print(''.join(['%10.3f']*len(x)) % tuple(x), file=tape5file)
+                    except IndexError:
+                        break
+                    # print >> tape5file
         else:
             if not horz:
-                print >> tape5file
+                # print >> tape5file
+                pass
 
     if aerosols and not monoRTM:
 
         # set record 4.1 IHAZE,ISEASN,IVULCN,ICSTL,ICLD,IVSA,VIS,WSS,WHH,RAINRT,GNDALT
         # Format (6I5,5F10.3)
-
+        print("Writing Record 4.1")
         iHaze = aerosols
         iSeason = 0
         gndAlt = 0
@@ -1074,9 +1095,9 @@ def writeTape5(path, parameterDictionary, isFile=False, monoRTM=False,useMeters=
 
         # aerosolString+="%10.3f%10.3f%10.3f%10.3f%10.3f"%(vis,0.0,0.0,0.0,gndAlt)
 
-        print >> tape5file, aerosolString
+        print(aerosolString, file=tape5file)
 
-    print >> tape5file, '%'
+    print('%', file=tape5file)
 
     tape5file.close()
     return outputFileName
@@ -1105,7 +1126,7 @@ def readARM(fileName):
         vWinds,
         tt.data,
         )
-"""
+
 class LblObject:
     outputList = {OPTICAL_DEPTH: 0, TRANSMISSION: 0, 'Radiance': 1, RADIANCE:1, TRANSMISSION:0, SOLAR:2}
     lblSolarFileName = 'SOLAR.RAD'
@@ -1129,14 +1150,14 @@ class LblObject:
     def getBaseRtParameters(self, dv=0.0001, others=dict()):
         data = {'dv': dv,
               # layers parameters and flags
-              'udl': 80,
+              'udl': 100,
               'usePressure': False,
               'horz': False,
               # surface parameter
               'surfaceTerrain':[300, 0.8, 0, 0, 0.2, 0, 0],
               # atmospheric parameters
               'aptg': ['A', 'A', 'H', '6', '6', '6', '6', '6', '6'],
-              'co2scale': 380.0,
+              'co2scale': 410.0,
               'Temp': [], 'CO2': [], 'WV': [], 'N2O': [], 'O3': [], 'O2': [], 'CH4': [], 'CO': [],
               'aerosol': 0,
               # solar parameter and flags
@@ -1159,20 +1180,21 @@ class LblObject:
 
         self.monoRtmCommand = None
         self.monoRtmSpectraFileName = None
+        os.chdir(self.workPath)
 
         self.makeWorkPath()
         
     def write(self, buffer):
-        print >> self.log, buffer,
+        print(buffer, file= self.log)
 
     def makeWorkPath(self):
         if self.workPath:
             try:
                 os.makedirs(self.workPath)
-                print >> self, "creating %s for lblrtm scratch files ..." % (self.workPath)
+                print("creating %s for lblrtm scratch files ..." % (self.workPath), file=self)
             except OSError:
                 # traceback.print_exc()
-                print >> self, "using %s for lblrtm scratch files ..." % (self.workPath)
+                print("using %s for lblrtm scratch files ..." % (self.workPath), file=self)
     
     def loadConfiguration(self, configFileName, section):
         configData = xmlConfig.xmlConfig(configFileName)
@@ -1210,11 +1232,11 @@ class LblObject:
             self.monoRtmSpectraFileName = None
 
         if self.debug:
-            print >> self, "using tape3 file %s ..." % (self.tape3fileName)
-            print >> self, "using solar file %s ..." % (self.solarFileName)
-            print >> self, "using rt command %s ..." % (self.rtCommand)
-            print >> self, "using monort command %s ..." % (self.monoRtmCommand)
-            print >> self, "using monort spectra file %s ..." % (self.monoRtmSpectraFileName)
+            print("using tape3 file %s ..." % (self.tape3fileName), file=self)
+            print("using solar file %s ..." % (self.solarFileName), file=self)
+            print("using rt command %s ..." % (self.rtCommand), file=self)
+            print("using monort command %s ..." % (self.monoRtmCommand), file=self)
+            print("using monort spectra file %s ..." % (self.monoRtmSpectraFileName), file=self)
 
         self.makeWorkPath()
 
@@ -1281,13 +1303,13 @@ class LblObject:
         outputGrid = map(lambda x:x * rtParameters['dv'] + rtParameters['v1'],
                        range(int((rtParameters['v2'] - rtParameters['v1']) / rtParameters['dv'] + 0.5)))
         
-        if rtParameters.has_key('opticalDepthFlag'): opticalDepthFlag = rtParameters['opticalDepthFlag']
-        if rtParameters.has_key('radianceFlag'): radianceFlag = rtParameters['radianceFlag']
-        if rtParameters.has_key('downwellingFlag'): downwellingFlag = rtParameters['downwellingFlag']
-        if rtParameters.has_key('upwellingFlag'): upwellingFlag = rtParameters['upwellingFlag']
-        if rtParameters.has_key('numberDensityFlag'): numberDensityFlag = rtParameters['numberDensityFlag']
-        if rtParameters.has_key('tangentFlag'): tangentFlag = rtParameters['tangentFlag']
-        if rtParameters.has_key('layerOpticalDepthFlag'): layerOpticalDepthFlag = rtParameters['layerOpticalDepthFlag']
+        if rtParameters.__contains__('opticalDepthFlag'): opticalDepthFlag = rtParameters['opticalDepthFlag']
+        if rtParameters.__contains__('radianceFlag'): radianceFlag = rtParameters['radianceFlag']
+        if rtParameters.__contains__('downwellingFlag'): downwellingFlag = rtParameters['downwellingFlag']
+        if rtParameters.__contains__('upwellingFlag'): upwellingFlag = rtParameters['upwellingFlag']
+        if rtParameters.__contains__('numberDensityFlag'): numberDensityFlag = rtParameters['numberDensityFlag']
+        if rtParameters.__contains__('tangentFlag'): tangentFlag = rtParameters['tangentFlag']
+        if rtParameters.__contains__('layerOpticalDepthFlag'): layerOpticalDepthFlag = rtParameters['layerOpticalDepthFlag']
 
         if upwellingFlag or downwellingFlag:
             # setup solar file
@@ -1306,21 +1328,21 @@ class LblObject:
                           readLayerOpticalDepths=layerOpticalDepthFlag,
                           thread=thread)
 
-            if results.has_key(OPTICAL_DEPTH):
+            if results.__contains__(OPTICAL_DEPTH):
                 if not (downwellingFlag or upwellingFlag): output[WAVE_NUMBER] = outputGrid[:]
                 output[OPTICAL_DEPTH] = np.interp(outputGrid, results[OPTICAL_DEPTH][0], results[OPTICAL_DEPTH][1]).tolist()
 
-                if results.has_key(NUMBER_DENSITY):
+                if results.__contains__(NUMBER_DENSITY):
                     output[NUMBER_DENSITY] = results[NUMBER_DENSITY][:]
-                if results.has_key(LAYER_OPTICAL_DEPTHS):
+                if results.__contains__(LAYER_OPTICAL_DEPTHS):
                     output[LAYER_OPTICAL_DEPTHS] = results[LAYER_OPTICAL_DEPTHS][:]
         
         if radianceFlag or downwellingFlag or upwellingFlag:
             rtParameters['output'] = self.outputList[RADIANCE]
             tape5 = writeTape5(self.workPath, rtParameters)
-            results = run(self.rtCommand, self.tape3fileName, tape5, ostream=self, thread=thread)
+            results = run([os.path.join(self.workPath,self.rtCommand), self.tape3fileName, tape5], capture_output=True)
             
-            if results.has_key(RADIANCE):
+            if results.__contains__(RADIANCE):
                 if radianceFlag: output[WAVE_NUMBER] = outputGrid[:]
                 output[RADIANCE] = (np.interp(outputGrid, results[RADIANCE][0], results[RADIANCE][1]) * 1e4).tolist()
 
@@ -1345,8 +1367,8 @@ class LblObject:
              
             localRtParameters['output'] = self.outputList[OPTICAL_DEPTH]
             tape5 = writeTape5(self.workPath, localRtParameters)
-            results = run(self.rtCommand, self.tape3fileName, tape5, ostream=self, thread=thread)
-            if results.has_key(OPTICAL_DEPTH):
+            results = run(self.rtCommand, self.tape3fileName, tape5, thread=thread)
+            if results.__contains__(OPTICAL_DEPTH):
                 output[SOLAR_OPTICAL_DEPTH] = np.interp(outputGrid, results[OPTICAL_DEPTH][0],
                                                       results[OPTICAL_DEPTH][1]).tolist()
 
@@ -1364,8 +1386,9 @@ class LblObject:
             results = run(self.rtCommand, self.tape3fileName, tape5, ostream=self, clean=False, readSolar=True,
                         thread=thread)
             
-            if results.has_key(SOLAR):
-                if not upwellingFlag: output[WAVE_NUMBER] = outputGrid[:]
+            if results.__contains__(SOLAR):
+                if not upwellingFlag: 
+                    output[WAVE_NUMBER] = outputGrid[:]
                 # convert from 1/cm2 to 1/m2
                 # output[RADIANCE]=(np.interp(outputGrid,wn,radiance)*1e4).tolist()
                 
@@ -1390,7 +1413,7 @@ class LblObject:
         if upwellingFlag:
             localRtParameters = rtParameters.copy()
 
-            if rtParameters.has_key('surfaceTerrain'):   
+            if rtParameters.__contains__('surfaceTerrain'):   
                 surfaceParameters = rtParameters['surfaceTerrain']
             else: 
                 surfaceParameters = [300, 0.8, 0, 0, 0.2 / math.pi, 0, 0]
@@ -1433,7 +1456,7 @@ class LblObject:
             if self.debug: self.copyTapeFile('TAPE5','TAPE5.upwelling')
             
             if wn is None:
-                print >> self,'LBLRTM Calculate solar upwelling step #1 failed'
+                print(LBLRTM Calculate solar upwelling step #1 failed', file=self)
                 return output
 
             self.copyTapeFile('TAPE12','TAPE12.upwelling')
@@ -1461,7 +1484,7 @@ class LblObject:
                     output[SOLAR_RADIANCE]=np.interp(outputGrid,solarRadWN,solarRadiance)*6.8e-5*1e4
                     output[SOLAR_RADIANCE]=output[SOLAR_RADIANCE].tolist()
             else:
-                print >> self,'LBLRTM Calculate solar upwelling step #3 failed'
+                print(LBLRTM Calculate solar upwelling step #3 failed', file=self)
             
             '''
 
@@ -1479,8 +1502,9 @@ class LblObject:
     def cleanWorkSpace(self):
         try: shutil.rmtree(self.workPath)
         except OSError: pass
-        try: print >> self, "removing %s scratch files and path ..." % (self.workPath)
-        except IOError: print "removing %s scratch files and path ..." % (self.workPath)
+        try: print("removing %s scratch files and path ..." % (self.workPath), file=self)
+        except IOError: 
+          print("removing %s scratch files and path ..." % (self.workPath))
 
 class MonoRtmObject(LblObject):
 
@@ -1512,11 +1536,11 @@ class MonoRtmObject(LblObject):
         results = run(self.rtCommand, self.tape3fileName, tape5, \
           ostream=self, thread=thread, monoRTM=True, cwd=self.workPath)
 
-        if results.has_key(RADIANCE):
+        if results.__contains__(RADIANCE):
             output = dict()
             output[WAVE_NUMBER] = results[RADIANCE][0]
             output[RADIANCE] = results[RADIANCE][1]
             output[OPTICAL_DEPTH] = results[OPTICAL_DEPTH][1]
        
         return output
-"""
+
