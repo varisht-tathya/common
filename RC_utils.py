@@ -40,7 +40,7 @@ class constants():
   # end mks2cgs
 # end constants
 
-def readTAPE7(inFile, header=True):
+def readTAPE7(inFile, header=True, xs=False):
   """
   Read in a single TAPE7 (LBLRTM profile/layer amounts as calculated
   by LBLATM subroutine) and return parameters in dictionary
@@ -59,7 +59,7 @@ def readTAPE7(inFile, header=True):
       scale_factor: float array, secant scaling factor (nLayers)
       end_alt: float array, instrument altitude
       obs_alt: float array, observer altitude
-      SZA: float, solar zenith angle
+      ang: float, viewing angle (nadir = 180)
 
       p_lay: float array, average pressure of given layer (nLayers)
       T_lay: float array, average temperature of given layer (nLayers)
@@ -72,12 +72,17 @@ def readTAPE7(inFile, header=True):
 
       scale_factor_lay: float array, secant scaling factor for each
         layer (nLayers)
-      vmr: float array, mixing ratio for each gas at each layer
+      molDen: float array, molecule density for each gas at each layer
         (nMol-1 x nLayer; the -1 is for the broadening density)
+        molecule numbers follow the HITRAN convention --
+        https://hitran.org/lbl/ -- but are 0-offset (e.g., molecule
+        0 is H2O, 1 is CO2, etc.)
 
   Keywords
     header -- boolean, does the TAPE7 have the traditional comment
       at the beginning (starts with "$")
+    xs -- boolean, extract XS profiles INSTEAD OF line-by-line
+      molecule profiles
   """
 
   def stringSlice(inStr, idxArr):
@@ -98,15 +103,14 @@ def readTAPE7(inFile, header=True):
   if header: datT7 = datT7[1:]
 
   record21 = datT7[0]
-  profile = datT7[1:]
 
-  iForm = int(stringSlice(record21, np.array([1])))
+  iForm = int(stringSlice(record21, np.array([0, 1])))
   nLay = int(stringSlice(record21, np.array([2, 5])))
   nMol = int(stringSlice(record21, np.array([5, 10])))
   secnto = float(stringSlice(record21, np.array([10, 19])))
   h1 = float(stringSlice(record21, np.array([40, 48])))
   h2 = float(stringSlice(record21, np.array([52, 60])))
-  sza = float(stringSlice(record21, np.array([65, 73])))
+  ang = float(stringSlice(record21, np.array([65, 73])))
 
   # the number of "layer lines" is dependent on the number of
   # molecules. the convention is dictated by Record 2.1.2 in the
@@ -121,6 +125,33 @@ def readTAPE7(inFile, header=True):
 
   # for the P/H/T line
   nLayLines += 1
+
+  # number of molecule/LBL data lines (i.e., non-XS) = layers + r21 + header
+  nLinesLBL = int(nLayLines * nLay + 2)
+
+  # either molecules or cross-sections profile extraction
+  if xs:
+    # have to reassign some variables for XS
+    profile = datT7[nLinesLBL-1:]
+    nMol = int(profile[0].split()[0])
+
+    # "record 3.7.1" is identical to record21 and redundant; skip XS
+    # header, XS names (variable number of lines), and "record 3.7.1"
+    # TO DO: have not tested nRec371 past nMol=8
+    nRec371 = nMol // 8 + 1
+    xsNames = ' '.join(profile[1:1+nRec371]).split()
+
+    # 8th molecule is always the broadener (molecules and xs)
+    xsNames[7] = 'broadener'
+
+    profile = profile[2+nRec371:]
+
+    # TO DO: test robustness of this and nRec371 for XS
+    nLayLines = 1 if nMol <= 7 else int(np.ceil((nMol+1)/8.0))
+    nLayLines += 1
+  else:
+    profile = datT7[1:nLinesLBL-1]
+  # endif xs
 
   # how the data are read (i.e., array slicing) depends on iForm
   # this is record 2.1.1
@@ -155,8 +186,8 @@ def readTAPE7(inFile, header=True):
     ([] for i in range(8))
 
   # molecule volume mixing ratios will first be a list of lists
-  # "sub" VMR is a subset of all VMRs for a given layer
-  vmr, subVMR = [], []
+  # "sub" den is a subset of all densities for a given layer
+  molDen, subMolDen = [], []
   for iLine, line in enumerate(profile):
     if iLine % nLayLines == 0:
       # layer P/T/Z info
@@ -178,41 +209,52 @@ def readTAPE7(inFile, header=True):
       tLev.append(stringSlice(line, itLev2))
 
       # reset this guy every layer
-      subVMR = []
+      subMolDen = []
     else:
       # layer molecule amounts
-      subVMR += line.split()
+      subMolDen += line.split()
 
       # are we on the last line of the layer?
-      if iLine % nLayLines == nLayLines-1: vmr.append(subVMR)
+      if iLine % nLayLines == nLayLines-1: molDen.append(subMolDen)
     # end modulo 0
   # end layer loop
 
   # convert lists to arrays
-  pLay, tLay, scaleLay, typeLay, pathLay, altLev, pLev, tLev, vmr = \
+  pLay, tLay, scaleLay, typeLay, pathLay, altLev, pLev, tLev, molDen = \
     np.array(pLay), np.array(tLay), np.array(scaleLay), \
     np.array(typeLay), np.array(pathLay), np.array(altLev), \
-    np.array(pLev), np.array(tLev), np.array(vmr)
+    np.array(pLev), np.array(tLev), np.array(molDen)
 
   outDict = {'n_layers': nLay, 'n_molecules': nMol, 'format': iForm, \
-    'scale_factor': secnto, 'obs_alt': h1, 'end_alt': h2, 'SZA': sza}
+    'scale_factor': secnto, 'obs_alt': h1, 'end_alt': h2,
+    'view_angle': ang}
 
-  # extract broadening density from molecule VMR and transpose VMR
+  # extract broadening density from molecule den and transpose density
   # so it is nMol x nLay
   iBroad = 7
-  broadener = vmr[:, iBroad]
-  iVMR = np.delete(np.arange(nMol+1), iBroad)
-  vmr = vmr[:, iVMR].T
+  broadener = molDen[:, iBroad]
+  iDen = np.delete(np.arange(nMol+1), iBroad)
+  molDen = molDen[:, iDen].T
 
   # make a list of all lists, loop through it, and convert all lists
   # to arrays of the proper type and stuff them into outDict
+  # TO DO: make outDict['densities'] its own dictionaries with
+  # LBL molecule names like we do for XS
   dictKeys = ['p_lay', 'T_lay', 'scale_factor_lay', 'type_lay', \
-    'path_lay', 'alt_lev', 'p_lev', 'T_lev', 'vmr', 'broadener']
+    'path_lay', 'alt_lev', 'p_lev', 'T_lev', 'densities', 'broadener']
   tempList = [pLay, tLay, scaleLay, typeLay, pathLay, altLev, \
-    pLev, tLev, vmr, broadener]
+    pLev, tLev, molDen, broadener]
   for iKey, temp in enumerate(tempList):
+    if iKey == 'densities' and xs: continue
     outDict[dictKeys[iKey]] = temp.astype(float)
 
+  if xs:
+    outDict['densities'] = {}
+    xsNames.remove('broadener')
+
+    for iKey, key in enumerate(xsNames):
+      outDict['densities'][key] = molDen[iKey].astype(float)
+  # endif xs
   return outDict
 # end readTAPE7
 
