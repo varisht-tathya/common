@@ -681,6 +681,12 @@ def writeTape5(path, parameterDictionary, isFile=False, monoRTM=False,useMeters=
             horz=0
     else: horz = 0
 
+    if parameterDictionary.__contains__('scanFlag'):
+      scanFlag = 1
+      hwhm = parameterDictionary['hwhm']
+    else:
+      scanFlag = 0
+
     angle = parameterDictionary['angle']
 
     # define user defined layers/levels
@@ -742,13 +748,14 @@ def writeTape5(path, parameterDictionary, isFile=False, monoRTM=False,useMeters=
     if outputType == 2 and not monoRTM:
         print("Writing for solar upwelling")
         if parameterDictionary['inFlag'] == 2 and parameterDictionary['iotFlag'] == 2:
-            print(' HI=0 F4=0 CN=0 AE=0 EM=2 SC=0 FI=0 PL=0 TS=0 AM=0 MG=4 LA=0 OD=0 XS=0    0    0', file=tape5file)
-            print("%5d%5d  %3d%5d%10.5f     %10.5f" % (parameterDictionary['inFlag'], parameterDictionary['iotFlag'], parameterDictionary['solarDay'], -1,0.0,0.0), file=tape5file)
+            print(' HI=0 F4=0 CN=0 AE=0 EM=2 SC=0 FI=0 PL=0 TS=0 AM=0 MG=0 LA=0 OD=0 XS=0    0    0', file=tape5file)
+            # print("%5d%5d  %3d%5d%10.5f     %10.5f" % (parameterDictionary['inFlag'], parameterDictionary['iotFlag'], parameterDictionary['solarDay'], -1,0.0,0.0), file=tape5file)
+            print("%5d%5d  %3d" % (parameterDictionary['inFlag'], parameterDictionary['iotFlag'], parameterDictionary['solarDay']), file=tape5file)
             surfRefl = ['s']
             print('%10.3f%10.3f%10.3f%10.3f%10.3f%10.3f%10.3f%5s' % tuple(surfaceTerrain + surfRefl), file=tape5file)
 
-            # print("0.0      0.0", file=tape5file)
-            # print("-1.", file=tape5file)
+            print("0.0      0.0", file=tape5file)
+            print("-1.", file=tape5file)
             print("%", file=tape5file)
             tape5file.close()
             return os.path.join(path, 'TAPE5')
@@ -776,23 +783,26 @@ def writeTape5(path, parameterDictionary, isFile=False, monoRTM=False,useMeters=
     else:
         if outputType < 2:
             print(\
-            ' HI=1 F4=1 CN=%0d AE=%0d EM=%0d SC=0 FI=0 PL=0 TS=0 AM=1 MG=3 LA=0 OD=%0d XS=0    0    0' \
+            ' HI=1 F4=1 CN=%0d AE=%0d EM=%0d SC=0 FI=0 PL=0 TS=0 AM=1 MG=0 LA=0 OD=%0d XS=0    0    0' \
               % (continuumFlag,aerosols, outputType, iodFlag), file=tape5file)
+            # print(\
+            # ' HI=1 F4=1 CN=%0d AE=%0d EM=%0d SC=0 FI=0 PL=0 TS=0 AM=1 MG=0 LA=0 OD=%0d XS=0    0    0' \
+            #   % (continuumFlag,aerosols, outputType, iodFlag))
         else:
             print("Writing record 1.2 for solar")
             print(\
-            ' HI=0 F4=0 CN=0 AE=%0d EM=%0d SC=0 FI=0 PL=0 TS=0 AM=1 MG=4 LA=0 OD=%0d XS=0    0    0' \
+            ' HI=0 F4=0 CN=0 AE=%0d EM=%0d SC=0 FI=0 PL=0 TS=0 AM=1 MG=0 LA=0 OD=%0d XS=0    0    0' \
               % (aerosols, outputType, iodFlag), file=tape5file)
 
-        # write record 1.2a
-        print("Writing Record 1.2a")
-        if outputType == 2:
-            # INFLAG,  IOTFLG,  JULDAT
-            #  1-5,    6-10,   13-15
-            #   I5,      I5,  2X, I3
+        # # write record 1.2a
+        # print("Writing Record 1.2a")
+        # if outputType == 2:
+        #     # INFLAG,  IOTFLG,  JULDAT
+        #     #  1-5,    6-10,   13-15
+        #     #   I5,      I5,  2X, I3
 
-            print("%5d%5d  %3d" % (parameterDictionary['inFlag'], parameterDictionary['iotFlag'],
-                                              parameterDictionary['solarDay']), file=tape5file)
+        #     print("%5d%5d  %3d" % (parameterDictionary['inFlag'], parameterDictionary['iotFlag'],
+        #                                       parameterDictionary['solarDay']), file=tape5file)
 
     # determine molecule scaling
         
@@ -857,6 +867,7 @@ def writeTape5(path, parameterDictionary, isFile=False, monoRTM=False,useMeters=
         # write record 1.3a
         print("Writing Record 1.3a")
         print(stringFormat % scaleFactors, file=tape5file)
+        # print(stringFormat % scaleFactors)
         
     # write record 1.4
     print("Writing Record 1.4")
@@ -864,9 +875,10 @@ def writeTape5(path, parameterDictionary, isFile=False, monoRTM=False,useMeters=
         print('%10.3f%10.3f%10.3f%10.3f%10.3f%10.3f%10.3f%5s' % tuple(surfaceTerrain + ['']), file=tape5file)
     else:
         if outputType == 1:
-            if parameterDictionary['angle'] > 90 and parameterDictionary['angle'] <= 180: surfRefl = ['l']
-            else: surfRefl = ['s']
+            if parameterDictionary['downwellingFlag']: surfRefl = ['s']
+            elif parameterDictionary['upwellingFlag']: surfRefl = ['l']
             print('%10.3f%10.3f%10.3f%10.3f%10.3f%10.3f%10.3f%5s' % tuple(surfaceTerrain + surfRefl), file=tape5file)
+            # print('%10.3f%10.3f%10.3f%10.3f%10.3f%10.3f%10.3f%5s' % tuple(surfaceTerrain + surfRefl))
 
         if outputType == 2 and parameterDictionary['iotFlag'] == 2:
             surfRefl = ['s']
@@ -882,6 +894,7 @@ def writeTape5(path, parameterDictionary, isFile=False, monoRTM=False,useMeters=
         else:
             heightType = 2
 
+    print("Record 2 not needed as LBLATM is selected.")
     # write record 3.1
     print("Writing Record 3.1")
     iFXTYPE = 0
@@ -908,7 +921,15 @@ def writeTape5(path, parameterDictionary, isFile=False, monoRTM=False,useMeters=
                                                                                                   iMunits, Re, 
                                                                                                   hSpace, vBar, '', 
                                                                                                   refLat), file=tape5file)
+        # print('    %1d    %1d%5d    1    0    7    1%2i %2i%10s%10s%10s%10s%10s' % (model, heightType,
+        #                                                                             userDefinedLayers,
+        #                                                                             iFXTYPE,
+        #                                                                             iMunits, Re,
+        #                                                                             hSpace, vBar, '', refLat))
+        print("Writing record 3.2")
         print('%10.3f%10.3f%10.3f%10s%5i' % (observer, target, angle,'',tangent), file=tape5file)
+        # print('%10.3f%10.3f%10.3f%10s%5i' % (observer, target, angle,'',tangent))
+        
 
     if not model:
         # aptg is altitude, pressure, temperature and gases vector
@@ -1096,6 +1117,22 @@ def writeTape5(path, parameterDictionary, isFile=False, monoRTM=False,useMeters=
         # aerosolString+="%10.3f%10.3f%10.3f%10.3f%10.3f"%(vis,0.0,0.0,0.0,gndAlt)
 
         print(aerosolString, file=tape5file)
+
+    # if scanFlag > 0:
+    #   # Set the variables in Record 6 For scan merge function
+    #   hwhm = parameterDictionary['hwhm']
+    #   scanString = '%10.3f%10.3f%10.3f   %2d   %2d   %2d%10.4f' % (hwhm, waveNumber1, waveNumber2, 1, 4, 0, 0)  + ' '*15 +'%5d%5d' % (13, 2)
+
+    #   print(scanString, file=tape5file)
+      
+
+    # if scanFlag > 0:
+    #   # Set the variables in Record 8.1 For scan function
+    #   hwhm = parameterDictionary['hwhm'] #change this
+    #   scanString = '%10.3f%10.3f%10.3f   %2d   %2d   %2d%10.4f   %2d   %2d   %2d   %2d%5d' % (hwhm, waveNumber1, waveNumber2, 1, 0, 0, 0, 12, 0, 1, 11, 2)
+
+    #   print(scanString, file=tape5file)
+
 
     print('%', file=tape5file)
 
